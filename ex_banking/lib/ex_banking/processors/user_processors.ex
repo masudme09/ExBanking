@@ -128,6 +128,115 @@ defmodule ExBanking.UserProcessors do
     #  return {:ok, balance}
   end
 
+  @spec send(
+          from_user :: String.t(),
+          to_user :: String.t(),
+          amount :: number,
+          currency :: String.t()
+        ) ::
+          {:ok, from_user_balance :: number, to_user_balance :: number}
+          | {:error,
+             :wrong_arguments
+             | :not_enough_money
+             | :sender_does_not_exist
+             | :receiver_does_not_exist
+             | :too_many_requests_to_sender
+             | :too_many_requests_to_receiver}
+
+  def send(from_user, to_user, amount, currency) do
+    params =
+      %{
+        from_user: from_user,
+        to_user: to_user,
+        name: currency,
+        balance: amount
+      }
+      |> validate_amount_not_zero()
+      |> SchemaValidator.validate_number([:balance])
+      |> SchemaValidator.validate_string([:from_user, :to_user, :name])
+      |> SchemaValidator.validate_not_negative([:balance])
+
+    # check if we have free space for processing from_user request in user_limiter
+    # if not, return {:error, :too_many_requests_to_sender}
+    # if yes, add one active process in limiter and continue
+
+    # check if we have free space for processing to_user request in user_limiter
+    # if not, return {:error, :too_many_requests_to_receiver}
+    # if yes, add one active process in limiter and continue
+
+    case params do
+      {:error, _} = error ->
+        error
+
+      _params ->
+        check_from_user_exists =
+          User.get(from_user)
+          |> case do
+            {:ok, _} ->
+              true
+
+            {:error, _} = _error ->
+              false
+          end
+
+        check_to_user_exists =
+          User.get(to_user)
+          |> case do
+            {:ok, _} ->
+              true
+
+            {:error, _} = _error ->
+              false
+          end
+
+        check_enough_money =
+          User.get(from_user)
+          |> get_currency_account(currency)
+          |> get_currency_account_balance(from_user)
+          |> case do
+            {:ok, balance} when balance >= amount ->
+              true
+
+            {:ok, _} ->
+              false
+
+            {:error, _} ->
+              false
+          end
+
+        cond do
+          check_from_user_exists && check_to_user_exists && check_enough_money ->
+            withdraw(from_user, amount, currency)
+            |> case do
+              {:ok, from_user_new_balance} ->
+                deposit(to_user, amount, currency)
+                |> case do
+                  {:ok, to_user_new_balance} ->
+                    {:ok, from_user_new_balance, to_user_new_balance}
+
+                  {:error, _} = error ->
+                    error
+                end
+
+              {:error, _} = error ->
+                error
+            end
+
+          !check_from_user_exists ->
+            {:error, :sender_does_not_exist}
+
+          !check_to_user_exists ->
+            {:error, :receiver_does_not_exist}
+
+          !check_enough_money ->
+            {:error, :not_enough_money}
+        end
+    end
+
+    # add one finished process in limiter
+    #  return {:ok, from_user_balance, to_user_balance}
+  end
+
   defp get_currency_account_balance(account, _user_name) do
     case account do
       {:error, _} = error ->

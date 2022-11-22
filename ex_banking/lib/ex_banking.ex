@@ -58,5 +58,7 @@ defmodule ExBanking do
              | :too_many_requests_to_sender
              | :too_many_requests_to_receiver}
   def send(from_user, to_user, amount, currency) do
+    task = Task.async(fn -> UserProcessors.send(from_user, to_user, amount, currency) end)
+    Task.await(task, 6000)
   end
 end
