@@ -8,6 +8,7 @@ defmodule ExBanking.Entry do
   def init(_) do
     children = [
       {Registry, keys: :unique, name: ExBanking.Registry},
+      {DynamicSupervisor, name: ExBanking.UserLimiterSupervisor, strategy: :one_for_one},
       %{id: :users_repo, start: {ExBanking.Repo, :start_link, [[name: :users]]}},
       %{
         id: :user_currency_accounts_repo,

@@ -4,11 +4,9 @@ defmodule ExBanking.UserProcessors do
   """
   import ExBanking.NumericOperations
   alias Helpers.SchemaValidator
-  alias ExBanking.{User, CurrencyAccounts}
+  alias ExBanking.{User, CurrencyAccounts, ProcessLimiter}
 
-  @spec create_user(user :: String.t()) :: :ok | {:error, :wrong_arguments | :user_already_exists}
   def create_user(user) do
-    # create user in database
     params =
       %{
         user_name: user
@@ -22,8 +20,8 @@ defmodule ExBanking.UserProcessors do
       _params ->
         User.insert(params)
         |> case do
-          {:ok, _} ->
-            # instantiate user_limiter for user through Registry
+          {:ok, user} ->
+            ExBanking.UserLimiterSupervisor.start_child(user)
             :ok
 
           {:error, _} = error ->
@@ -32,9 +30,6 @@ defmodule ExBanking.UserProcessors do
     end
   end
 
-  @spec deposit(user :: String.t(), amount :: number, currency :: String.t()) ::
-          {:ok, new_balance :: number}
-          | {:error, :wrong_arguments | :user_does_not_exist | :too_many_requests_to_user}
   def deposit(user_name, amount, currency) do
     params =
       %{
@@ -44,31 +39,29 @@ defmodule ExBanking.UserProcessors do
       }
       |> validate_amount_not_zero()
 
-    # check if we have free space for processing user_name request in user_limiter
-    # if not, return {:error, :too_many_requests_to_user}
-    # if yes, add one active process in limiter and continue
+    cond do
+      params == {:error, :wrong_arguments} ->
+        params
 
-    case params do
-      {:error, _} = error ->
-        error
+      Registry.lookup(ExBanking.Registry, user_name) == [] ->
+        {:error, :user_does_not_exist}
 
-      _params ->
-        User.get(user_name)
-        |> get_currency_account(currency)
-        |> deposit_currency_account(amount, params)
+      Registry.lookup(ExBanking.Registry, user_name) ->
+        [{pid, _}] = Registry.lookup(ExBanking.Registry, user_name)
+
+        if ProcessLimiter.check_free_space(pid) do
+          ProcessLimiter.add_active_process(pid)
+
+          User.get(user_name)
+          |> get_currency_account(currency)
+          |> deposit_currency_account(amount, params)
+          |> tap(fn _ -> ProcessLimiter.add_finished_process(pid) end)
+        else
+          {:error, :too_many_requests_to_user}
+        end
     end
-
-    # add one finished process in limiter
-    #  return {:ok, new_balance}
   end
 
-  @spec withdraw(user :: String.t(), amount :: number, currency :: String.t()) ::
-          {:ok, new_balance :: number}
-          | {:error,
-             :wrong_arguments
-             | :user_does_not_exist
-             | :not_enough_money
-             | :too_many_requests_to_user}
   def withdraw(user_name, amount, currency) do
     params =
       %{
@@ -81,27 +74,29 @@ defmodule ExBanking.UserProcessors do
       |> SchemaValidator.validate_string([:user_name, :name])
       |> SchemaValidator.validate_not_negative([:balance])
 
-    # check if we have free space for processing user_name request in user_limiter
-    # if not, return {:error, :too_many_requests_to_user}
-    # if yes, add one active process in limiter and continue
+    cond do
+      params == {:error, :wrong_arguments} ->
+        params
 
-    case params do
-      {:error, _} = error ->
-        error
+      Registry.lookup(ExBanking.Registry, user_name) == [] ->
+        {:error, :user_does_not_exist}
 
-      _params ->
-        User.get(user_name)
-        |> get_currency_account(currency)
-        |> withdraw_currency_account(amount, params)
+      Registry.lookup(ExBanking.Registry, user_name) ->
+        [{pid, _}] = Registry.lookup(ExBanking.Registry, user_name)
+
+        if ProcessLimiter.check_free_space(pid) do
+          ProcessLimiter.add_active_process(pid)
+
+          User.get(user_name)
+          |> get_currency_account(currency)
+          |> withdraw_currency_account(amount, params)
+          |> tap(fn _ -> ProcessLimiter.add_finished_process(pid) end)
+        else
+          {:error, :too_many_requests_to_user}
+        end
     end
-
-    # add one finished process in limiter
-    #  return {:ok, new_balance}
   end
 
-  @spec get_balance(user :: String.t(), currency :: String.t()) ::
-          {:ok, balance :: number}
-          | {:error, :wrong_arguments | :user_does_not_exist | :too_many_requests_to_user}
   def get_balance(user_name, currency) do
     params =
       %{
@@ -110,38 +105,28 @@ defmodule ExBanking.UserProcessors do
       }
       |> SchemaValidator.validate_string([:user_name, :name])
 
-    # check if we have free space for processing user_name request in user_limiter
-    # if not, return {:error, :too_many_requests_to_user}
-    # if yes, add one active process in limiter and continue
+    cond do
+      params == {:error, :wrong_arguments} ->
+        params
 
-    case params do
-      {:error, _} = error ->
-        error
+      Registry.lookup(ExBanking.Registry, user_name) == [] ->
+        {:error, :user_does_not_exist}
 
-      _params ->
-        User.get(user_name)
-        |> get_currency_account(currency)
-        |> get_currency_account_balance(user_name)
+      Registry.lookup(ExBanking.Registry, user_name) ->
+        [{pid, _}] = Registry.lookup(ExBanking.Registry, user_name)
+
+        if ProcessLimiter.check_free_space(pid) do
+          ProcessLimiter.add_active_process(pid)
+
+          User.get(user_name)
+          |> get_currency_account(currency)
+          |> get_currency_account_balance(user_name)
+          |> tap(fn _ -> ProcessLimiter.add_finished_process(pid) end)
+        else
+          {:error, :too_many_requests_to_user}
+        end
     end
-
-    # add one finished process in limiter
-    #  return {:ok, balance}
   end
-
-  @spec send(
-          from_user :: String.t(),
-          to_user :: String.t(),
-          amount :: number,
-          currency :: String.t()
-        ) ::
-          {:ok, from_user_balance :: number, to_user_balance :: number}
-          | {:error,
-             :wrong_arguments
-             | :not_enough_money
-             | :sender_does_not_exist
-             | :receiver_does_not_exist
-             | :too_many_requests_to_sender
-             | :too_many_requests_to_receiver}
 
   def send(from_user, to_user, amount, currency) do
     params =
@@ -156,63 +141,40 @@ defmodule ExBanking.UserProcessors do
       |> SchemaValidator.validate_string([:from_user, :to_user, :name])
       |> SchemaValidator.validate_not_negative([:balance])
 
-    # check if we have free space for processing from_user request in user_limiter
-    # if not, return {:error, :too_many_requests_to_sender}
-    # if yes, add one active process in limiter and continue
+    cond do
+      params == {:error, :wrong_arguments} ->
+        params
 
-    # check if we have free space for processing to_user request in user_limiter
-    # if not, return {:error, :too_many_requests_to_receiver}
-    # if yes, add one active process in limiter and continue
+      Registry.lookup(ExBanking.Registry, from_user) == [] ->
+        {:error, :sender_does_not_exist}
 
-    case params do
-      {:error, _} = error ->
-        error
+      Registry.lookup(ExBanking.Registry, to_user) == [] ->
+        {:error, :receiver_does_not_exist}
 
-      _params ->
-        check_from_user_exists =
-          User.get(from_user)
-          |> case do
-            {:ok, _} ->
-              true
-
-            {:error, _} = _error ->
-              false
-          end
-
-        check_to_user_exists =
-          User.get(to_user)
-          |> case do
-            {:ok, _} ->
-              true
-
-            {:error, _} = _error ->
-              false
-          end
-
-        check_enough_money =
-          User.get(from_user)
-          |> get_currency_account(currency)
-          |> get_currency_account_balance(from_user)
-          |> case do
-            {:ok, balance} when balance >= amount ->
-              true
-
-            {:ok, _} ->
-              false
-
-            {:error, _} ->
-              false
-          end
+      Registry.lookup(ExBanking.Registry, from_user) ->
+        [{from_pid, _}] = Registry.lookup(ExBanking.Registry, from_user)
+        [{to_pid, _}] = Registry.lookup(ExBanking.Registry, to_user)
+        from_process_status = ProcessLimiter.check_free_space(from_pid)
+        to_process_status = ProcessLimiter.check_free_space(to_pid)
 
         cond do
-          check_from_user_exists && check_to_user_exists && check_enough_money ->
-            withdraw(from_user, amount, currency)
+          from_process_status == false ->
+            {:error, :too_many_requests_to_sender}
+
+          to_process_status == false ->
+            {:error, :too_many_requests_to_receiver}
+
+          from_process_status && to_process_status ->
+            ProcessLimiter.add_active_process(from_pid)
+            ProcessLimiter.add_active_process(to_pid)
+
+            withdraw_naive(from_user, amount, currency)
             |> case do
-              {:ok, from_user_new_balance} ->
-                deposit(to_user, amount, currency)
+              {:ok, from_user_balance} ->
+                deposit_naive(to_user, amount, currency)
                 |> case do
-                  {:ok, to_user_new_balance} ->
-                    {:ok, from_user_new_balance, to_user_new_balance}
+                  {:ok, to_user_balance} ->
+                    {:ok, from_user_balance, to_user_balance}
 
                   {:error, _} = error ->
                     error
@@ -221,20 +183,12 @@ defmodule ExBanking.UserProcessors do
               {:error, _} = error ->
                 error
             end
-
-          !check_from_user_exists ->
-            {:error, :sender_does_not_exist}
-
-          !check_to_user_exists ->
-            {:error, :receiver_does_not_exist}
-
-          !check_enough_money ->
-            {:error, :not_enough_money}
         end
+        |> tap(fn _ ->
+          ProcessLimiter.add_finished_process(from_pid)
+          ProcessLimiter.add_finished_process(to_pid)
+        end)
     end
-
-    # add one finished process in limiter
-    #  return {:ok, from_user_balance, to_user_balance}
   end
 
   defp get_currency_account_balance(account, _user_name) do
@@ -347,6 +301,61 @@ defmodule ExBanking.UserProcessors do
         else
           {:error, :currency_account_not_found}
         end
+    end
+  end
+
+  @doc """
+   withdraw without process limiter
+  """
+  defp withdraw_naive(user_name, amount, currency) do
+    params =
+      %{
+        user_name: user_name,
+        name: currency,
+        balance: amount
+      }
+      |> validate_amount_not_zero()
+      |> SchemaValidator.validate_number([:balance])
+      |> SchemaValidator.validate_string([:user_name, :name])
+      |> SchemaValidator.validate_not_negative([:balance])
+
+    cond do
+      params == {:error, :wrong_arguments} ->
+        params
+
+      Registry.lookup(ExBanking.Registry, user_name) == [] ->
+        {:error, :user_does_not_exist}
+
+      Registry.lookup(ExBanking.Registry, user_name) ->
+        User.get(user_name)
+        |> get_currency_account(currency)
+        |> withdraw_currency_account(amount, params)
+    end
+  end
+
+  @doc """
+   deposit without process limiter
+  """
+  defp deposit_naive(user_name, amount, currency) do
+    params =
+      %{
+        user_name: user_name,
+        name: currency,
+        balance: amount
+      }
+      |> validate_amount_not_zero()
+
+    cond do
+      params == {:error, :wrong_arguments} ->
+        params
+
+      Registry.lookup(ExBanking.Registry, user_name) == [] ->
+        {:error, :user_does_not_exist}
+
+      Registry.lookup(ExBanking.Registry, user_name) ->
+        User.get(user_name)
+        |> get_currency_account(currency)
+        |> deposit_currency_account(amount, params)
     end
   end
 end
