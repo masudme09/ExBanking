@@ -69,6 +69,29 @@ defmodule ExBanking.Repo do
     end
   end
 
+  @doc """
+  pid: can be pid or server name
+  Returns list of all entries that matches with pattern
+
+  Warning: slow performance. traverse all entries
+
+  Example:
+  ExBanking.Repo.matching_list(pid, {:"$1", %{user_name: "user1"}})
+
+  will return all keys that has user_name "user1"
+
+  ExBanking.Repo.matching_list(pid, :"$1")
+
+  returns all entries
+  """
+  def matching_list(pid, pattern) do
+    :ets.match(pid, pattern)
+    |> case do
+      [] -> {:error, :no_matching_entries}
+      result -> {:ok, result |> List.flatten()}
+    end
+  end
+
   # server side
 
   def init({:ok, table}) do

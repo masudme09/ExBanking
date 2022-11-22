@@ -1,6 +1,11 @@
 defmodule ExBankingTest do
   use ExUnit.Case
 
+  setup do
+    Application.stop(:ex_banking)
+    Application.start(:ex_banking)
+  end
+
   describe "user creation" do
     test "creates user" do
       assert ExBanking.create_user("user1") == :ok
@@ -20,6 +25,12 @@ defmodule ExBankingTest do
     test "deposits money to user account" do
       ExBanking.create_user("user1")
       assert ExBanking.deposit("user1", 100, "USD") == {:ok, 100}
+    end
+
+    test "deposit to existing currency account" do
+      ExBanking.create_user("user1")
+      ExBanking.deposit("user1", 100, "USD")
+      assert ExBanking.deposit("user1", 100, "USD") == {:ok, 200}
     end
 
     test "fails to deposit money to user account with wrong arguments" do
@@ -86,6 +97,24 @@ defmodule ExBankingTest do
       ExBanking.deposit("user1", 100, "USD")
       assert ExBanking.withdraw("user1", 50, "EUR") == {:error, :not_enough_money}
     end
+
+    test "can not withdraw negative amount" do
+      ExBanking.create_user("user1")
+      ExBanking.deposit("user1", 100, "USD")
+      assert ExBanking.withdraw("user1", -50, "USD") == {:error, :wrong_arguments}
+    end
+
+    test "can not withdraw zero amount" do
+      ExBanking.create_user("user1")
+      ExBanking.deposit("user1", 100, "USD")
+      assert ExBanking.withdraw("user1", 0, "USD") == {:error, :wrong_arguments}
+    end
+
+    test "withdraw amount is rounded to two decimal places" do
+      ExBanking.create_user("user1")
+      ExBanking.deposit("user1", 100, "USD")
+      assert ExBanking.withdraw("user1", 50.123, "USD") == {:ok, 49.88}
+    end
   end
 
   describe "get balance of user account" do
@@ -111,6 +140,17 @@ defmodule ExBankingTest do
       ExBanking.deposit("user1", 150, "EUR")
       assert ExBanking.get_balance("user1", "USD") == {:ok, 100.00}
       assert ExBanking.get_balance("user1", "EUR") == {:ok, 150.00}
+    end
+
+    test "get balance properly after inseritng mutiple user account" do
+      ExBanking.create_user("user1")
+      ExBanking.create_user("user2")
+      ExBanking.deposit("user1", 100, "USD")
+      ExBanking.deposit("user2", 150, "EUR")
+      ExBanking.deposit("user1", 100, "USD")
+      ExBanking.deposit("user2", 150, "USD")
+      assert ExBanking.get_balance("user1", "USD") == {:ok, 200.00}
+      assert ExBanking.get_balance("user2", "EUR") == {:ok, 150.00}
     end
 
     test "returned balance is rounded to two decimal places" do

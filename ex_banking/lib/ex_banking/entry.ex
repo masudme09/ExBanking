@@ -7,7 +7,12 @@ defmodule ExBanking.Entry do
 
   def init(_) do
     children = [
-      {Registry, keys: :unique, name: ExBanking.Registry}
+      {Registry, keys: :unique, name: ExBanking.Registry},
+      %{id: :users_repo, start: {ExBanking.Repo, :start_link, [[name: :users]]}},
+      %{
+        id: :user_currency_accounts_repo,
+        start: {ExBanking.Repo, :start_link, [[name: :currency_accounts]]}
+      }
     ]
 
     opts = [strategy: :one_for_one, name: __MODULE__]
