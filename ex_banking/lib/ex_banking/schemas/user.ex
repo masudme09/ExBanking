@@ -87,33 +87,23 @@ defmodule ExBanking.User do
     end
   end
 
-  # helpers
-  # I am not considering whitespaces..although it was not menthioned in the requirements
-  @spec create_users([String.t()]) :: {:ok, [t()]}
-  def create_users(users) do
-    result =
-      users
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(fn user_name ->
-        user_name = String.trim(user_name)
+  def associate_currency_account(user_name, currency_account) do
+    get(user_name)
+    |> case do
+      {:error, _} = error ->
+        error
 
-        user_name
-        |> String.length()
-        |> Kernel.>(0)
-        |> case do
-          true ->
-            insert(%{user_name: user_name, currency: "USD"})
-            |> case do
-              {:ok, user} -> user
-              {:error, _} -> nil
-            end
+      {:ok, user} ->
+        currency_accounts =
+          if user.currency_accounts == nil,
+            do: [currency_account.name],
+            else: user.currency_accounts ++ [currency_account.name]
 
-          false ->
-            nil
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    {:ok, result}
+        %{
+          user
+          | currency_accounts: currency_accounts
+        }
+        |> update()
+    end
   end
 end

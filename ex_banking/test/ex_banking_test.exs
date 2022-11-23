@@ -57,16 +57,17 @@ defmodule ExBankingTest do
       assert ExBanking.deposit("user1", 100.123, "USD") == {:ok, 100.12}
     end
 
-    # # will be done separately
-    # test "performance test" do
-    #   ExBanking.create_user("user1")
-    #   assert ExBanking.deposit("user1", 100, "USD") == {:ok, 100}
-    #   assert ExBanking.deposit("user1", 100, "USD") == {:ok, 200}
-    #   assert ExBanking.deposit("user1", 100, "USD") == {:ok, 300}
-    #   assert ExBanking.deposit("user1", 100, "USD") == {:ok, 400}
-    #   assert ExBanking.deposit("user1", 100, "USD") == {:ok, 500}
-    #   assert ExBanking.deposit("user1", 100, "USD") == {:error, :too_many_requests_to_user}
-    # end
+    test "performance test" do
+      ExBanking.create_user("user1")
+      ExBanking.create_user("user2")
+
+      for _ <- 1..30 do
+        Task.start(fn -> ExBanking.deposit("user1", 100, "USD") end)
+        Task.start(fn -> ExBanking.withdraw("user1", 100, "USD") end)
+      end
+
+      Process.sleep(2000)
+    end
   end
 
   describe "withdraw from user account" do

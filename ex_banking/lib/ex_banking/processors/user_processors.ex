@@ -13,20 +13,14 @@ defmodule ExBanking.UserProcessors do
       }
       |> SchemaValidator.validate_string([:user_name])
 
-    case params do
+    User.insert(params)
+    |> case do
+      {:ok, user} ->
+        ExBanking.UserLimiterSupervisor.start_child(user)
+        :ok
+
       {:error, _} = error ->
         error
-
-      _params ->
-        User.insert(params)
-        |> case do
-          {:ok, user} ->
-            ExBanking.UserLimiterSupervisor.start_child(user)
-            :ok
-
-          {:error, _} = error ->
-            error
-        end
     end
   end
 
@@ -55,7 +49,11 @@ defmodule ExBanking.UserProcessors do
           User.get(user_name)
           |> get_currency_account(currency)
           |> deposit_currency_account(amount, params)
-          |> tap(fn _ -> ProcessLimiter.add_finished_process(pid) end)
+          |> tap(fn _ ->
+            ProcessLimiter.add_finished_process(pid)
+            # naive timer to prevent too many requests to user
+            Process.sleep(100)
+          end)
         else
           {:error, :too_many_requests_to_user}
         end
@@ -83,6 +81,9 @@ defmodule ExBanking.UserProcessors do
 
       Registry.lookup(ExBanking.Registry, user_name) ->
         [{pid, _}] = Registry.lookup(ExBanking.Registry, user_name)
+
+        # naive timer to prevent too many requests to user
+        Process.sleep(100)
 
         if ProcessLimiter.check_free_space(pid) do
           ProcessLimiter.add_active_process(pid)
@@ -114,6 +115,9 @@ defmodule ExBanking.UserProcessors do
 
       Registry.lookup(ExBanking.Registry, user_name) ->
         [{pid, _}] = Registry.lookup(ExBanking.Registry, user_name)
+
+        # naive timer to prevent too many requests to user
+        Process.sleep(100)
 
         if ProcessLimiter.check_free_space(pid) do
           ProcessLimiter.add_active_process(pid)
@@ -154,6 +158,10 @@ defmodule ExBanking.UserProcessors do
       Registry.lookup(ExBanking.Registry, from_user) ->
         [{from_pid, _}] = Registry.lookup(ExBanking.Registry, from_user)
         [{to_pid, _}] = Registry.lookup(ExBanking.Registry, to_user)
+
+        # naive timer to prevent too many requests to user
+        Process.sleep(100)
+
         from_process_status = ProcessLimiter.check_free_space(from_pid)
         to_process_status = ProcessLimiter.check_free_space(to_pid)
 
@@ -165,8 +173,8 @@ defmodule ExBanking.UserProcessors do
             {:error, :too_many_requests_to_receiver}
 
           from_process_status && to_process_status ->
-            ProcessLimiter.add_active_process(from_pid)
-            ProcessLimiter.add_active_process(to_pid)
+            [from_pid, to_pid]
+            |> Enum.each(fn pid -> ProcessLimiter.add_active_process(pid) end)
 
             withdraw_naive(from_user, amount, currency)
             |> case do
@@ -185,8 +193,8 @@ defmodule ExBanking.UserProcessors do
             end
         end
         |> tap(fn _ ->
-          ProcessLimiter.add_finished_process(from_pid)
-          ProcessLimiter.add_finished_process(to_pid)
+          [from_pid, to_pid]
+          |> Enum.each(fn pid -> ProcessLimiter.add_finished_process(pid) end)
         end)
     end
   end
@@ -203,9 +211,6 @@ defmodule ExBanking.UserProcessors do
 
   defp withdraw_currency_account(account, amount, %{user_name: _user_name} = params) do
     case account do
-      {:error, :user_does_not_exist} = error ->
-        error
-
       {:error, :currency_account_not_found} = _error ->
         {:error, :not_enough_money}
 
@@ -226,6 +231,9 @@ defmodule ExBanking.UserProcessors do
 
       {:ok, %CurrencyAccounts{balance: balance}} when balance < amount ->
         {:error, :not_enough_money}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -233,6 +241,18 @@ defmodule ExBanking.UserProcessors do
     case currency_account do
       {:error, :user_does_not_exist} = error ->
         error
+
+      {:error, :currency_account_not_found} = _error ->
+        CurrencyAccounts.insert(params)
+        |> case do
+          {:ok, account} ->
+            _ = User.associate_currency_account(account.user_name, account)
+
+            {:ok, round_two(account.balance)}
+
+          {:error, _} = error ->
+            error
+        end
 
       {:ok, account} ->
         params = %{
@@ -249,28 +269,8 @@ defmodule ExBanking.UserProcessors do
             error
         end
 
-      {:error, _} = _error ->
-        CurrencyAccounts.insert(params)
-        |> case do
-          {:ok, account} ->
-            {:ok, user} = User.get(params.user_name)
-
-            currency_accounts =
-              if user.currency_accounts == nil,
-                do: [account.name],
-                else: user.currency_accounts ++ [account.name]
-
-            %{
-              user
-              | currency_accounts: currency_accounts
-            }
-            |> User.update()
-
-            {:ok, round_two(account.balance)}
-
-          {:error, _} = error ->
-            error
-        end
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -282,31 +282,22 @@ defmodule ExBanking.UserProcessors do
     end
   end
 
-  defp get_currency_account(user, currency) do
-    case user do
-      {:error, _} = error ->
-        error
+  defp get_currency_account({:error, _} = error, _currency), do: error
 
-      {:ok, user} ->
-        if user.currency_accounts do
-          Enum.find(user.currency_accounts, &(&1 == currency))
-          |> case do
-            nil ->
-              {:error, :currency_account_not_found}
+  defp get_currency_account({:ok, user}, currency) do
+    cond do
+      is_nil(user.currency_accounts) ->
+        {:error, :currency_account_not_found}
 
-            account_name ->
-              {:ok, account} = CurrencyAccounts.get(account_name, user.user_name)
-              {:ok, account}
-          end
-        else
-          {:error, :currency_account_not_found}
-        end
+      is_nil(Enum.find(user.currency_accounts, &(&1 == currency))) ->
+        {:error, :currency_account_not_found}
+
+      true ->
+        CurrencyAccounts.get(currency, user.user_name)
     end
   end
 
-  @doc """
-   withdraw without process limiter
-  """
+  # wthdraw without process limiter
   defp withdraw_naive(user_name, amount, currency) do
     params =
       %{
@@ -333,9 +324,7 @@ defmodule ExBanking.UserProcessors do
     end
   end
 
-  @doc """
-   deposit without process limiter
-  """
+  # deposit without process limiter
   defp deposit_naive(user_name, amount, currency) do
     params =
       %{

@@ -61,8 +61,11 @@ defmodule ExBanking.CurrencyAccounts do
 
         Repo.insert(@table_name, key, currency_account)
         |> case do
-          {:ok, currency_account} -> {:ok, currency_account}
-          {:error, _} -> {:error, :currency_account_already_exists}
+          {:ok, currency_account} ->
+            {:ok, currency_account}
+
+          {:error, _} ->
+            get(currency_account.name, currency_account.user_name)
         end
 
       {:error, _} = error ->

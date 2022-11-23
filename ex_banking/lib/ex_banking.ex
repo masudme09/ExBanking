@@ -19,8 +19,7 @@ defmodule ExBanking do
           {:ok, new_balance :: number}
           | {:error, :wrong_arguments | :user_does_not_exist | :too_many_requests_to_user}
   def deposit(user, amount, currency) do
-    task = Task.async(fn -> UserProcessors.deposit(user, amount, currency) end)
-    Task.await(task, 6000)
+    UserProcessors.deposit(user, amount, currency)
   end
 
   @spec withdraw(user :: String.t(), amount :: number, currency :: String.t()) ::
@@ -31,16 +30,14 @@ defmodule ExBanking do
              | :not_enough_money
              | :too_many_requests_to_user}
   def withdraw(user, amount, currency) do
-    task = Task.async(fn -> UserProcessors.withdraw(user, amount, currency) end)
-    Task.await(task, 6000)
+    UserProcessors.withdraw(user, amount, currency)
   end
 
   @spec get_balance(user :: String.t(), currency :: String.t()) ::
           {:ok, balance :: number}
           | {:error, :wrong_arguments | :user_does_not_exist | :too_many_requests_to_user}
   def get_balance(user, currency) do
-    task = Task.async(fn -> UserProcessors.get_balance(user, currency) end)
-    Task.await(task, 6000)
+    UserProcessors.get_balance(user, currency)
   end
 
   @spec send(
@@ -58,7 +55,6 @@ defmodule ExBanking do
              | :too_many_requests_to_sender
              | :too_many_requests_to_receiver}
   def send(from_user, to_user, amount, currency) do
-    task = Task.async(fn -> UserProcessors.send(from_user, to_user, amount, currency) end)
-    Task.await(task, 6000)
+    UserProcessors.send(from_user, to_user, amount, currency)
   end
 end
