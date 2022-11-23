@@ -32,6 +32,9 @@ defmodule ExBanking.UserProcessors do
         balance: amount
       }
       |> validate_amount_not_zero()
+      |> SchemaValidator.validate_number([:balance])
+      |> SchemaValidator.validate_string([:user_name, :name])
+      |> SchemaValidator.validate_not_negative([:balance])
 
     cond do
       params == {:error, :wrong_arguments} ->
@@ -201,11 +204,14 @@ defmodule ExBanking.UserProcessors do
 
   defp get_currency_account_balance(account, _user_name) do
     case account do
-      {:error, _} = error ->
-        error
+      {:error, :currency_account_not_found} ->
+        {:ok, round_two(0)}
 
       {:ok, account} ->
         {:ok, round_two(account.balance)}
+
+      {:error, _} = error ->
+        error
     end
   end
 

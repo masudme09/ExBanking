@@ -135,6 +135,11 @@ defmodule ExBankingTest do
       assert ExBanking.get_balance("user2", "USD") == {:error, :user_does_not_exist}
     end
 
+    test "return zero balance for user account that is added yet" do
+      ExBanking.create_user("user1")
+      assert ExBanking.get_balance("user1", "USD") == {:ok, 0.00}
+    end
+
     test "get balance properly for multiple requested currency" do
       ExBanking.create_user("user1")
       ExBanking.deposit("user1", 100, "USD")
