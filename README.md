@@ -1,4 +1,5 @@
 # ExBanking
+This is an attempt to implement in-memory banking like solution. Basically, I have played through different OTP behaviours like GenServers, Superviors etc. 
 
 This project has 5 key components as follows:
 
